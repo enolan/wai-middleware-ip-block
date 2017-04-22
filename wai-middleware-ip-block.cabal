@@ -1,0 +1,26 @@
+name:                wai-middleware-ip-block
+version:             0.1.0.0
+synopsis:            Block requests by IP CIDR
+homepage:            https://github.com/enolan/wai-middleware-ip-block#readme
+license:             BSD3
+license-file:        LICENSE
+author:              Echo Nolan
+maintainer:          echo@echonolan.net
+copyright:           2017 Echo Nolan
+category:            Web
+build-type:          Simple
+extra-source-files:  README.md
+cabal-version:       >=1.10
+
+library
+  hs-source-dirs:      src
+  exposed-modules:     Network.Wai.Middleware.IpBlock
+  build-depends:       base >= 4.7 && < 5, bytestring >= 0.10, http-types >= 0.9,
+                       iproute == 1.7.*, network >= 2.6, trifecta >= 1.6,
+                       wai == 3.2.*
+  default-language:    Haskell2010
+  ghc-options:         -fdefer-typed-holes -Wall
+
+source-repository head
+  type:     git
+  location: https://github.com/enolan/wai-middleware-ip-block
