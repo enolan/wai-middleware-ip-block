@@ -20,7 +20,8 @@ import Network.Wai
 import System.Exit
 import System.IO
 import Text.Read (readMaybe)
-import Text.Trifecta hiding (dot)
+import Text.Trifecta hiding (Parser, dot)
+import qualified Text.Trifecta as Tri
 
 ipBlockMiddleware :: Response -> IPRTable IPv4 Bool -> Middleware
 ipBlockMiddleware denyResponse iprt app req respond = do
@@ -42,14 +43,14 @@ ipBlockMiddleware denyResponse iprt app req respond = do
 
 ipBlockMiddlewareFromString :: String -> Response -> Middleware
 ipBlockMiddlewareFromString cfgString denyResponse =
-  case parseString configParser mempty cfgString of
+  case parseString (runUnlined configParser) mempty cfgString of
     Success table -> ipBlockMiddleware denyResponse table
     Failure einfo -> error $
       "wai-middleware-ip-block: parsing config failed: " <> show einfo
 
 ipBlockMiddlewareFromFile :: FilePath -> Response -> IO Middleware
 ipBlockMiddlewareFromFile path denyResponse = do
-  mbTable <- parseFromFile configParser path
+  mbTable <- parseFromFile (runUnlined configParser) path
   case mbTable of
     Just table -> return $ ipBlockMiddleware denyResponse table
     Nothing    -> do
@@ -77,6 +78,8 @@ default deny
 20.20.1.0/24 deny
 -}
 
+type Parser = Unlined Tri.Parser
+
 configParser :: Parser (IPRTable IPv4 Bool)
 configParser = fmap go configParser'
   where
@@ -90,7 +93,8 @@ configParser' :: Parser (Bool, [(AddrRange IPv4, Bool)])
 configParser' = do
   _ <- textSymbol "default"
   defaultAllow <- routingActionParser
-  specs <- many routingSpecParser
+  _ <- newline
+  specs <- many (routingSpecParser <* newline)
   return (defaultAllow, specs)
 
 routingSpecParser :: Parser (AddrRange IPv4, Bool)
