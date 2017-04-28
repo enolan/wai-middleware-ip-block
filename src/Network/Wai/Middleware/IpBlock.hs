@@ -2,6 +2,7 @@
 module Network.Wai.Middleware.IpBlock
     ( ipBlockMiddleware
     , ipBlockMiddlewareFromFile
+    , ipBlockMiddlewareFromFileEnv
     , ipBlockMiddlewareFromString
     , basicDenyResponse
     ) where
@@ -17,6 +18,7 @@ import Data.Semigroup
 import Network.HTTP.Types
 import Network.Socket (SockAddr(..))
 import Network.Wai
+import System.Environment (lookupEnv)
 import System.Exit
 import System.IO
 import Text.Read (readMaybe)
@@ -60,6 +62,18 @@ ipBlockMiddlewareFromFile path denyResponse = do
       pure $ ipBlockMiddleware denyResponse trustForwardedFor table
     Nothing    -> do
       hPutStrLn stderr "wai-middleware-ip-block file parsing failed, exiting"
+      exitFailure
+
+-- | Create an IP blocking middleware with a configuration stored it a file
+--   named by an environment variable.
+ipBlockMiddlewareFromFileEnv :: String -> Response -> IO Middleware
+ipBlockMiddlewareFromFileEnv env denyResponse = do
+  mbPath <- lookupEnv env
+  case mbPath of
+    Just path -> ipBlockMiddlewareFromFile path denyResponse
+    Nothing   -> do
+      hPutStrLn stderr $
+        "wai-middleware-ip-block environment variable " <> env <> " not found"
       exitFailure
 
 shouldAllow :: IPv4 -> IPRTable IPv4 Bool -> Bool
