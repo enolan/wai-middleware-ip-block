@@ -1,4 +1,5 @@
-{-# Language OverloadedStrings, ScopedTypeVariables #-}
+{-# LANGUAGE DeriveGeneric, FlexibleInstances, OverloadedStrings,
+             RecordWildCards, ScopedTypeVariables #-}
 module Network.Wai.Middleware.IpBlock
     ( ipBlockMiddleware
     , ipBlockMiddlewareFromFile
@@ -9,12 +10,16 @@ module Network.Wai.Middleware.IpBlock
 
 import Prelude hiding (lookup)
 
-import Control.Monad
+import Data.Aeson.Types (typeMismatch)
 import qualified Data.ByteString.Char8 as B
+import qualified Data.HashMap.Lazy as HM
 import Data.IP
 import Data.IP.RouteTable
 import Data.Maybe
 import Data.Semigroup
+import qualified Data.Text as T
+import Data.Yaml hiding (Parser)
+import GHC.Generics
 import Network.HTTP.Types
 import Network.Socket (SockAddr(..))
 import Network.Wai
@@ -22,11 +27,9 @@ import System.Environment (lookupEnv)
 import System.Exit
 import System.IO
 import Text.Read (readMaybe)
-import Text.Trifecta hiding (Parser, dot)
-import qualified Text.Trifecta as Tri
 
-ipBlockMiddleware :: Response -> Bool -> IPRTable IPv4 Bool -> Middleware
-ipBlockMiddleware denyResponse trustForwardedFor iprt app req respond = do
+ipBlockMiddleware :: Response -> BlockConfig -> Middleware
+ipBlockMiddleware denyResponse BlockConfig{..} app req respond = do
   let forwardedHdr = listToMaybe $
         filter (\(nm, _) -> nm == "X-Forwarded-For") $ requestHeaders req
       sockIp = case remoteHost req of
@@ -37,6 +40,10 @@ ipBlockMiddleware denyResponse trustForwardedFor iprt app req respond = do
         Just (_, val) -> if trustForwardedFor
           then readMaybe $ B.unpack $ B.takeWhile (/= ',') val
           else sockIp
+      iprt = foldl
+        (\tbl RouteSpec{..} -> insert range allow tbl)
+        empty $
+        (RouteSpec "0.0.0.0/0" defaultAllow) : routeSpecs
   case mbIncomingIP of
     Nothing -> do
       hPutStrLn stderr $
@@ -46,22 +53,22 @@ ipBlockMiddleware denyResponse trustForwardedFor iprt app req respond = do
       then app req respond
       else respond denyResponse
 
-ipBlockMiddlewareFromString :: String -> Response -> Middleware
+ipBlockMiddlewareFromString :: B.ByteString -> Response -> Middleware
 ipBlockMiddlewareFromString cfgString denyResponse =
-  case parseString (runUnlined configParser) mempty cfgString of
-    Success (trustForwardedFor, table) ->
-      ipBlockMiddleware denyResponse trustForwardedFor table
-    Failure einfo -> error $
+  case decodeEither cfgString of
+    Right cfg ->
+      ipBlockMiddleware denyResponse cfg
+    Left einfo -> error $
       "wai-middleware-ip-block: parsing config failed: " <> show einfo
 
 ipBlockMiddlewareFromFile :: FilePath -> Response -> IO Middleware
 ipBlockMiddlewareFromFile path denyResponse = do
-  mbTable <- parseFromFile (runUnlined configParser) path
+  mbTable <- decodeFileEither path
   case mbTable of
-    Just (trustForwardedFor, table) ->
-      pure $ ipBlockMiddleware denyResponse trustForwardedFor table
-    Nothing    -> do
-      hPutStrLn stderr "wai-middleware-ip-block file parsing failed, exiting"
+    Right cfg ->
+      pure $ ipBlockMiddleware denyResponse cfg
+    Left err  -> do
+      hPutStrLn stderr $ "wai-middleware-ip-block file parsing failed: " <> show err
       exitFailure
 
 -- | Create an IP blocking middleware with a configuration stored it a file
@@ -90,64 +97,32 @@ basicDenyResponse = responseLBS
   [(hContentType, "text/plain")]
   "Request blocked by wai-middleware-ip-block"
 
-{-
-default deny
-forwarded-for trust
-67.189.87.218 allow
-20.20.0.0/16 allow
-20.20.1.0/24 deny
--}
+data BlockConfig = BlockConfig
+  {defaultAllow :: Bool,
+   trustForwardedFor :: Bool,
+   routeSpecs :: [RouteSpec]}
+  deriving (Generic, Show)
 
-type Parser = Unlined Tri.Parser
+data RouteSpec = RouteSpec {range :: AddrRange IPv4, allow :: Bool}
+  deriving (Generic, Show)
 
-configParser :: Parser (Bool, IPRTable IPv4 Bool)
-configParser = fmap go configParser' <* eof
-  where
-  go :: (Bool, Bool, [(AddrRange IPv4, Bool)]) -> (Bool, IPRTable IPv4 Bool)
-  go (trustForwardedFor, defaultAllow, specs) =
-     (trustForwardedFor,
-      foldl
-      (\tbl (addrRange, allow) -> insert addrRange allow tbl)
-      empty $ ("0.0.0.0/0", defaultAllow) : specs)
+-- This is easier using generics, but it means creating orphans for AddrRange
+-- and IPv4
+instance ToJSON BlockConfig
 
-configParser' :: Parser (Bool, Bool, [(AddrRange IPv4, Bool)])
-configParser' = do
-  defaultAllow <- textSymbol "default" *> routingActionParser <* newline
-  trustForwardedFor <-
-    textSymbol "forwarded-for" *>
-    choice
-    [textSymbol "trust" *> pure True,
-     textSymbol "notrust" *> pure False] <* newline
-  specs <- many (routingSpecParser <* newline)
-  return (trustForwardedFor, defaultAllow, specs)
+instance ToJSON RouteSpec where
+  toJSON spec = object [("range", rangeJSON), "allow" .= allow spec]
+    where
+    rangeJSON = String $ T.pack $ show $ range spec
 
-routingSpecParser :: Parser (AddrRange IPv4, Bool)
-routingSpecParser = do
-  addrRange <- addrRangeParser
-  someSpace
-  act <- routingActionParser
-  pure (addrRange, act)
+instance FromJSON BlockConfig
 
-addrRangeParser :: Parser (AddrRange IPv4)
-addrRangeParser = try $ do
-  let dot :: Parser () = void $ char '.'
-  a <- ipOctetParser <* dot
-  b <- ipOctetParser <* dot
-  c <- ipOctetParser <* dot
-  d <- ipOctetParser
-  mbBits <- optional $ char '/' >> conditionalDecimalParser (<=32) "mask subnet bits > 32!"
-  let ip = toIPv4 [a,b,c,d]
-  return $ makeAddrRange ip (fromMaybe 32 mbBits)
-
-ipOctetParser :: Parser Int
-ipOctetParser = conditionalDecimalParser (<256) "Octet in IP >= 256!"
-
-conditionalDecimalParser :: (Integer -> Bool) -> String -> Parser Int
-conditionalDecimalParser f msg = decimal >>=
-  (\i -> if f i
-         then pure $ fromIntegral i
-         else fail msg)
-
-routingActionParser :: Parser Bool
-routingActionParser = choice
-  [symbol "deny" >> pure False, symbol "allow" >> pure True]
+instance FromJSON RouteSpec where
+  parseJSON (Object o) = RouteSpec <$> parseAddrRange <*> o .: "allow"
+    where parseAddrRange = case HM.lookup "range" o of
+            Just (String str) -> case readMaybe $ T.unpack str of
+              Just adr -> return adr
+              Nothing -> fail "Couldn't parse IP range"
+            Just somethingElse -> typeMismatch "address range" somethingElse
+            Nothing -> fail "missing key range"
+  parseJSON somethingElse = typeMismatch "RouteSpec" somethingElse
