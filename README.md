@@ -1,20 +1,23 @@
-wai-middleware-ip-block: Block incoming requests by CIDR IP ranges.
+# wai-middleware-ip-block: Block incoming requests by CIDR IP ranges.
 
 This is a WAI middleware for blocking incoming requests by IP range.
 
-Example usage goes here
+See Haddock for documentation, including the YAML configuration format.
 
-It uses a simple configuration format. The first line is either "default allow"
-or "default deny". Every line after that is of the form "2.4.0.0/16 deny". The
-bitmask is optional. Example:
+To use this with the Yesod scaffold, modify the `makeApplication` function
+in `Application.hs` like so:
 ```
-default deny
-67.189.87.218 allow
-20.20.0.0/16 allow
-20.20.1.0/24 deny
+makeApplication :: App -> IO Application
+makeApplication foundation = do
+    logWare <- makeLogWare foundation
+    -- Create the WAI application and apply middlewares
+    appPlain <- toWaiAppPlain foundation
+    ipBlock <- ipBlockMiddlewareFromFileEnv "IP_BLOCK_CFG" basicDenyResponse
+    return $ ipBlock $ logWare $ defaultMiddlewaresNoLogging appPlain
+
 ```
 
-Rules are prioritized by specificity.
-
-**DO NOT USE THIS FOR STRONG SECURITY**. I wrote this in a few hours and it
-almost certainly has bugs. Use a real, mature, firewall if at all possible.
+**Don't rely on this for security**. I wrote this so I could put a site up on
+the internet before I was ready to make it public. IP based blocking is in
+general a weak measure and this package in particular has undergone very little
+testing, none of it adversarial.

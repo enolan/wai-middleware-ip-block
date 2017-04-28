@@ -9,7 +9,7 @@ maintainer:          echo@echonolan.net
 copyright:           2017 Echo Nolan
 category:            Web
 build-type:          Simple
-extra-source-files:  README.md
+extra-source-files:  README.md, CHANGELOG.md
 cabal-version:       >=1.10
 
 library
