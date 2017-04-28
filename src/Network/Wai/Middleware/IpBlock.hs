@@ -103,12 +103,9 @@ routingSpecParser = do
 addrRangeParser :: Parser (AddrRange IPv4)
 addrRangeParser = try $ do
   let dot :: Parser () = void $ char '.'
-  a <- ipOctetParser
-  dot
-  b <- ipOctetParser
-  dot
-  c <- ipOctetParser
-  dot
+  a <- ipOctetParser <* dot
+  b <- ipOctetParser <* dot
+  c <- ipOctetParser <* dot
   d <- ipOctetParser
   mbBits <- optional $ char '/' >> conditionalDecimalParser (<=32) "mask subnet bits > 32!"
   let ip = toIPv4 [a,b,c,d]
