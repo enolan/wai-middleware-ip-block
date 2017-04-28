@@ -23,15 +23,18 @@ import Text.Read (readMaybe)
 import Text.Trifecta hiding (Parser, dot)
 import qualified Text.Trifecta as Tri
 
-ipBlockMiddleware :: Response -> IPRTable IPv4 Bool -> Middleware
-ipBlockMiddleware denyResponse iprt app req respond = do
-  let forwarded = listToMaybe $
+ipBlockMiddleware :: Response -> Bool -> IPRTable IPv4 Bool -> Middleware
+ipBlockMiddleware denyResponse trustForwardedFor iprt app req respond = do
+  let forwardedHdr = listToMaybe $
         filter (\(nm, _) -> nm == "X-Forwarded-For") $ requestHeaders req
-      mbIncomingIP = case forwarded of
-        Nothing -> case remoteHost req of
+      sockIp = case remoteHost req of
           SockAddrInet _ hostAddr -> Just $ fromHostAddress hostAddr
-          _ -> Nothing
-        Just (_, val) -> readMaybe $ B.unpack $ B.takeWhile (/= ',') val
+          _                        -> Nothing
+      mbIncomingIP = case forwardedHdr of
+        Nothing -> sockIp
+        Just (_, val) -> if trustForwardedFor
+          then readMaybe $ B.unpack $ B.takeWhile (/= ',') val
+          else sockIp
   case mbIncomingIP of
     Nothing -> do
       hPutStrLn stderr $
@@ -44,7 +47,8 @@ ipBlockMiddleware denyResponse iprt app req respond = do
 ipBlockMiddlewareFromString :: String -> Response -> Middleware
 ipBlockMiddlewareFromString cfgString denyResponse =
   case parseString (runUnlined configParser) mempty cfgString of
-    Success table -> ipBlockMiddleware denyResponse table
+    Success (trustForwardedFor, table) ->
+      ipBlockMiddleware denyResponse trustForwardedFor table
     Failure einfo -> error $
       "wai-middleware-ip-block: parsing config failed: " <> show einfo
 
@@ -52,7 +56,8 @@ ipBlockMiddlewareFromFile :: FilePath -> Response -> IO Middleware
 ipBlockMiddlewareFromFile path denyResponse = do
   mbTable <- parseFromFile (runUnlined configParser) path
   case mbTable of
-    Just table -> return $ ipBlockMiddleware denyResponse table
+    Just (trustForwardedFor, table) ->
+      pure $ ipBlockMiddleware denyResponse trustForwardedFor table
     Nothing    -> do
       hPutStrLn stderr "wai-middleware-ip-block file parsing failed, exiting"
       exitFailure
@@ -73,6 +78,7 @@ basicDenyResponse = responseLBS
 
 {-
 default deny
+forwarded-for trust
 67.189.87.218 allow
 20.20.0.0/16 allow
 20.20.1.0/24 deny
@@ -80,22 +86,26 @@ default deny
 
 type Parser = Unlined Tri.Parser
 
-configParser :: Parser (IPRTable IPv4 Bool)
-configParser = fmap go configParser'
+configParser :: Parser (Bool, IPRTable IPv4 Bool)
+configParser = fmap go configParser' <* eof
   where
-  go :: (Bool, [(AddrRange IPv4, Bool)]) -> IPRTable IPv4 Bool
-  go (defaultAllow, specs) =
-     foldl
-     (\tbl (addrRange, allow) -> insert addrRange allow tbl)
-     empty $ ("0.0.0.0/0", defaultAllow) : specs
+  go :: (Bool, Bool, [(AddrRange IPv4, Bool)]) -> (Bool, IPRTable IPv4 Bool)
+  go (trustForwardedFor, defaultAllow, specs) =
+     (trustForwardedFor,
+      foldl
+      (\tbl (addrRange, allow) -> insert addrRange allow tbl)
+      empty $ ("0.0.0.0/0", defaultAllow) : specs)
 
-configParser' :: Parser (Bool, [(AddrRange IPv4, Bool)])
+configParser' :: Parser (Bool, Bool, [(AddrRange IPv4, Bool)])
 configParser' = do
-  _ <- textSymbol "default"
-  defaultAllow <- routingActionParser
-  _ <- newline
+  defaultAllow <- textSymbol "default" *> routingActionParser <* newline
+  trustForwardedFor <-
+    textSymbol "forwarded-for" *>
+    choice
+    [textSymbol "trust" *> pure True,
+     textSymbol "notrust" *> pure False] <* newline
   specs <- many (routingSpecParser <* newline)
-  return (defaultAllow, specs)
+  return (trustForwardedFor, defaultAllow, specs)
 
 routingSpecParser :: Parser (AddrRange IPv4, Bool)
 routingSpecParser = do
