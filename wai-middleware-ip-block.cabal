@@ -11,6 +11,8 @@ category:            Web
 build-type:          Simple
 extra-source-files:  README.md, CHANGELOG.md
 cabal-version:       >=1.10
+description:         A WAI middleware that blocks incoming requests based on
+                     their IPs, using CIDR ranges.
 
 library
   hs-source-dirs:      src
