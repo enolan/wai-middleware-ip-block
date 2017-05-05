@@ -14,10 +14,13 @@ makeApplication foundation = do
     appPlain <- toWaiAppPlain foundation
     ipBlock <- ipBlockMiddlewareFromFileEnv "IP_BLOCK_CFG" basicDenyResponse
     return $ ipBlock $ logWare $ defaultMiddlewaresNoLogging appPlain
-
 ```
+
+When your server launches, it'll look for an environment variable
+`IP_BLOCK_CFG`. That should have the path to a YAML formatted configuration
+file. The details of that format are in the Haddock.
 
 **Don't rely on this for security**. I wrote this so I could put a site up on
 the internet before I was ready to make it public. IP based blocking is in
-general a weak measure and this package in particular has undergone very little
-testing, none of it adversarial.
+general a weak measure and this package in particular has undergone relatively
+little testing, none of it adversarial.
