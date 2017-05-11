@@ -13,12 +13,16 @@ makeApplication foundation = do
     -- Create the WAI application and apply middlewares
     appPlain <- toWaiAppPlain foundation
     ipBlock <- ipBlockMiddlewareFromFileEnv "IP_BLOCK_CFG" basicDenyResponse
-    return $ ipBlock $ logWare $ defaultMiddlewaresNoLogging appPlain
+    return $ logWare $ ipBlock $ defaultMiddlewaresNoLogging appPlain
 ```
 
 When your server launches, it'll look for an environment variable
 `IP_BLOCK_CFG`. That should have the path to a YAML formatted configuration
 file. The details of that format are in the Haddock.
+
+Note: the ordering of the middleware above is important! `logWare` must be
+applied after `ipBlock` so that blocked requests are logged. Otherwise they will
+be dropped silently - this library does no logging on its own.
 
 **Don't rely on this for security**. I wrote this so I could put a site up on
 the internet before I was ready to make it public. IP based blocking is in
